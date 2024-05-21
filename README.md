@@ -29,6 +29,7 @@ This repository contains a template script for automating course evaluations by 
 3. **Copy and Paste the Script:**
    - Copy the entire script from `auto-evaluation-script.js`.
    - Paste the script into the console and press `Enter`.
+   - If browser isn't allowing to paste,then type 'allow pasting' and paste the script again.
 
 ## Example Script
 
