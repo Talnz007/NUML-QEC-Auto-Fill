@@ -1,7 +1,7 @@
-// QEC Dashboard Auto-Fill Script
+// QEC Dashboard Auto-Fill Script - Enhanced Version
 // This script automatically fills out all Teacher and Course Evaluation Forms from the Dashboard
 
-// Configuration options - easily customize your preferences
+// Configuration options
 const config = {
     // Rating preferences
     teacherRating: {
@@ -32,6 +32,7 @@ const config = {
     
     // Advanced settings
     debug: false,          // Set to true to log actions without filling the form
+    verbose: true,         // Show detailed logs
 };
 
 // URLs for the dashboard and evaluation forms
@@ -80,42 +81,67 @@ function getComments(formType, section) {
                                    courseComments[section] || courseComments['content_organization'];
 }
 
+// Log messages with verbosity control
+function log(message, isError = false, forceShow = false) {
+    if (config.verbose || forceShow || isError) {
+        console.log(isError ? `❌ ERROR: ${message}` : `ℹ️ ${message}`);
+    }
+}
+
 // Fill radio buttons for the current form
 function fillRadioButtons(formType) {
-    console.log(`Filling radio buttons for ${formType} form...`);
+    log(`Filling radio buttons for ${formType} form...`);
     
     const ratingConfig = formType === 'teacher' ? config.teacherRating : config.courseRating;
     
     // Special handling for attendance question (Q.5) in course form
     if (formType === 'course') {
-        // Map attendance values to their corresponding radio button values
-        const attendanceMap = {
-            '>81%': '5',
-            '80%': '4',
-            '60%': '3',
-            '40%': '2',
-            '20%': '1'
-        };
+        // Find all table rows that might contain the attendance question
+        const tableRows = document.querySelectorAll('tr');
+        let attendanceRow = null;
         
-        // Find the attendance question (Q.5) radio buttons
-        const attendanceQuestions = document.querySelectorAll('input[type="radio"]');
-        const attendanceQuestion = Array.from(attendanceQuestions).find(input => {
-            const questionText = input.closest('tr')?.textContent || '';
-            return questionText.includes('attendance') || questionText.includes('Approximate level');
-        });
-        
-        if (attendanceQuestion) {
-            const attendanceValue = attendanceMap[config.attendanceValue] || '5';
-            const attendanceRadioGroup = attendanceQuestion.name;
-            const attendanceRadio = document.querySelector(`input[name="${attendanceRadioGroup}"][value="${attendanceValue}"]`);
-            if (attendanceRadio && !config.debug) {
-                attendanceRadio.click();
-                console.log(`Set attendance (Q.5) to ${config.attendanceValue}`);
+        for (const row of tableRows) {
+            if (row.textContent.includes('Approximate level') || 
+                row.textContent.includes('attendance') || 
+                row.textContent.match(/Q\.?\s*5/i)) {
+                attendanceRow = row;
+                break;
             }
+        }
+        
+        if (attendanceRow) {
+            log('Found attendance question row');
+            
+            // Map attendance values to their expected position in the radio buttons
+            const attendanceValueMap = {
+                '>81%': 0, // First radio in the group
+                '80%': 1,  // Second radio
+                '60%': 2,  // Third radio
+                '40%': 3,  // Fourth radio
+                '20%': 4   // Fifth radio
+            };
+            
+            // Find all radio buttons in this row
+            const radioButtons = attendanceRow.querySelectorAll('input[type="radio"]');
+            
+            if (radioButtons.length >= 5) {
+                // Get the position based on the configured attendance value
+                const position = attendanceValueMap[config.attendanceValue] || 0;
+                
+                // Click the appropriate radio button
+                if (radioButtons[position] && !config.debug) {
+                    radioButtons[position].click();
+                    log(`Set attendance (Q.5) to ${config.attendanceValue}`);
+                }
+            } else {
+                log(`Attendance radio buttons not found in expected format. Found ${radioButtons.length} buttons`, true);
+            }
+        } else {
+            log('Attendance question row not found', true);
         }
     }
     
-    // Get all radio inputs on the page
+    // Get all radio inputs grouped by name
     const radioGroups = {};
     document.querySelectorAll('input[type="radio"]').forEach(radio => {
         if (!radioGroups[radio.name]) {
@@ -125,173 +151,499 @@ function fillRadioButtons(formType) {
     });
     
     // For each radio group, select appropriate value
+    let radioGroupsProcessed = 0;
+    
     Object.keys(radioGroups).forEach(groupName => {
-        // Skip attendance question if already handled for course form
-        if (formType === 'course' && (groupName.includes('Q5') || groupName.includes('Q.5'))) {
+        // Skip attendance question if in course form (already handled)
+        if (formType === 'course') {
             const questionText = radioGroups[groupName][0].closest('tr')?.textContent || '';
-            if (questionText.includes('attendance') || questionText.includes('Approximate level')) {
+            if (questionText.includes('Approximate level') || questionText.match(/Q\.?\s*5/i)) {
                 return;
             }
         }
         
+        // Get the desired rating value
         const value = ratingConfig.randomize ? 
             getRandomRating(ratingConfig.min, ratingConfig.max).toString() : 
             ratingConfig.defaultValue.toString();
         
-        const radioToSelect = radioGroups[groupName].find(r => r.value === value);
-        if (radioToSelect && !config.debug) {
-            radioToSelect.click();
-            console.log(`Selected rating ${value} for ${groupName}`);
+        // For debugging
+        log(`Processing radio group: ${groupName} - Setting to value: ${value}`);
+        
+        // Select the radio with the matching value or the highest available value
+        let bestMatch = null;
+        let bestMatchValue = -1;
+        
+        radioGroups[groupName].forEach(radio => {
+            const radioValue = parseInt(radio.value);
+            
+            // If we find an exact match, use it
+            if (radio.value === value) {
+                bestMatch = radio;
+                bestMatchValue = radioValue;
+                return;
+            }
+            
+            // Otherwise keep track of the highest value that's not higher than our target
+            if (radioValue <= parseInt(value) && radioValue > bestMatchValue) {
+                bestMatch = radio;
+                bestMatchValue = radioValue;
+            }
+        });
+        
+        if (bestMatch && !config.debug) {
+            bestMatch.click();
+            radioGroupsProcessed++;
+            log(`Selected rating ${bestMatch.value} for ${groupName}`);
+        } else if (!bestMatch) {
+            log(`No suitable radio button found for group ${groupName}`, true);
         }
     });
+    
+    log(`Processed ${radioGroupsProcessed} radio button groups`);
+    return radioGroupsProcessed > 0;
 }
 
 // Fill text areas with appropriate comments
 function fillTextAreas(formType) {
-    if (!config.addComments) return;
+    if (!config.addComments) return true;
     
-    console.log(`Filling comments for ${formType} form...`);
+    log(`Filling comments for ${formType} form...`);
+    
+    // Get all textarea elements
+    const textAreas = document.querySelectorAll('textarea');
+    log(`Found ${textAreas.length} textarea elements`);
+    
+    if (textAreas.length === 0) {
+        log('No textarea elements found!', true);
+        return false;
+    }
     
     // Different approach based on form type
     if (formType === 'teacher') {
-        // Get all textarea elements
-        const textAreas = document.querySelectorAll('textarea');
-        
         // Try to identify specific comment sections
         let doneWellArea, improvementsArea, additionalArea;
+        let unidentifiedAreas = [];
         
         textAreas.forEach(textarea => {
-            const nearbyText = textarea.parentElement.textContent.toLowerCase() || '';
+            // Look at the textarea itself, its parent, and its grandparent for identifying text
+            const nearbyText = [
+                textarea.textContent, 
+                textarea.previousElementSibling?.textContent,
+                textarea.parentElement?.textContent,
+                textarea.parentElement?.previousElementSibling?.textContent,
+                textarea.closest('tr')?.textContent
+            ].join(' ').toLowerCase();
             
             if (nearbyText.includes('especially well') || nearbyText.includes('done well')) {
                 doneWellArea = textarea;
+                log('Identified "done well" comment area');
             } else if (nearbyText.includes('improve') || nearbyText.includes('recommendations')) {
                 improvementsArea = textarea;
+                log('Identified "improvements" comment area');
             } else if (nearbyText.includes('additional') || nearbyText.includes('anything else')) {
                 additionalArea = textarea;
+                log('Identified "additional" comment area');
+            } else {
+                unidentifiedAreas.push(textarea);
+                log(`Unidentified comment area with nearby text: ${nearbyText.substring(0, 50)}...`);
             }
         });
         
-        // Fill identified areas or use index-based approach as fallback
+        // Fill identified areas
         if (doneWellArea) {
             doneWellArea.value = getComments('teacher', 'done_well');
+            simulateUserInput(doneWellArea);
         }
         if (improvementsArea) {
             improvementsArea.value = getComments('teacher', 'improvements');
+            simulateUserInput(improvementsArea);
         }
         if (additionalArea) {
             additionalArea.value = getComments('teacher', 'additional');
+            simulateUserInput(additionalArea);
         }
         
-        // Fallback if we couldn't identify specific areas
-        if (!doneWellArea && !improvementsArea && !additionalArea && textAreas.length > 0) {
+        // Handle unidentified areas or use fallback approach if no areas were identified
+        if (unidentifiedAreas.length > 0 || (!doneWellArea && !improvementsArea && !additionalArea)) {
+            log('Using fallback approach for comment areas');
+            
+            // If we have 3 or more textareas, assume they map to the 3 comment sections
             if (textAreas.length >= 3) {
-                textAreas[0].value = getComments('teacher', 'done_well');
-                textAreas[1].value = getComments('teacher', 'improvements');
-                textAreas[2].value = getComments('teacher', 'additional');
+                if (!doneWellArea) {
+                    textAreas[0].value = getComments('teacher', 'done_well');
+                    simulateUserInput(textAreas[0]);
+                }
+                if (!improvementsArea && textAreas.length > 1) {
+                    textAreas[1].value = getComments('teacher', 'improvements');
+                    simulateUserInput(textAreas[1]);
+                }
+                if (!additionalArea && textAreas.length > 2) {
+                    textAreas[2].value = getComments('teacher', 'additional');
+                    simulateUserInput(textAreas[2]);
+                }
             } else {
-                // If fewer textareas, fill them all with general comments
-                textAreas.forEach(textarea => {
+                // For any remaining unidentified areas, use general comments
+                unidentifiedAreas.forEach(textarea => {
                     textarea.value = getComments('teacher', 'done_well');
+                    simulateUserInput(textarea);
                 });
             }
         }
     } else { // Course form
-        // Get all comment sections in course form
-        const commentSections = document.querySelectorAll('textarea');
+        // Initialize counters for comment section types
+        const commentTypes = [
+            'content_organization',
+            'student_contribution',
+            'learning_environment',
+            'learning_resources',
+            'quality_delivery',
+            'assessment',
+            'instructor',
+            'tutorial',
+            'practical'
+        ];
         
-        commentSections.forEach(textarea => {
-            const parentText = textarea.closest('tr')?.textContent.toLowerCase() || '';
-            let commentType = 'content_organization';
+        let commentTypeIndex = 0;
+        
+        // Process each textarea
+        textAreas.forEach(textarea => {
+            // Try to determine section from context
+            const contextText = [
+                textarea.textContent,
+                textarea.previousElementSibling?.textContent,
+                textarea.parentElement?.textContent,
+                textarea.parentElement?.previousElementSibling?.textContent,
+                textarea.closest('tr')?.textContent,
+                textarea.closest('table')?.textContent
+            ].join(' ').toLowerCase();
             
-            if (parentText.includes('student contribution')) {
+            let commentType = null;
+            
+            // Try to identify the section from context
+            if (contextText.includes('course content') || contextText.includes('organization')) {
+                commentType = 'content_organization';
+            } else if (contextText.includes('student contribution')) {
                 commentType = 'student_contribution';
-            } else if (parentText.includes('learning environment')) {
+            } else if (contextText.includes('learning environment') || contextText.includes('teaching methods')) {
                 commentType = 'learning_environment';
-            } else if (parentText.includes('learning resources')) {
+            } else if (contextText.includes('learning resources')) {
                 commentType = 'learning_resources';
-            } else if (parentText.includes('quality of delivery')) {
+            } else if (contextText.includes('quality of delivery')) {
                 commentType = 'quality_delivery';
-            } else if (parentText.includes('assessment')) {
+            } else if (contextText.includes('assessment')) {
                 commentType = 'assessment';
-            } else if (parentText.includes('instructor')) {
+            } else if (contextText.includes('instructor')) {
                 commentType = 'instructor';
-            } else if (parentText.includes('tutorial')) {
+            } else if (contextText.includes('tutorial') || contextText.includes('counseling')) {
                 commentType = 'tutorial';
-            } else if (parentText.includes('practical')) {
+            } else if (contextText.includes('practical')) {
                 commentType = 'practical';
+            } else {
+                // If we can't identify the section, use a sequential approach
+                commentType = commentTypes[commentTypeIndex % commentTypes.length];
+                commentTypeIndex++;
             }
             
+            // Fill the textarea with the appropriate comment
             textarea.value = getComments('course', commentType);
+            simulateUserInput(textarea);
+            
+            log(`Filled ${commentType} comment`);
         });
     }
     
-    // Trigger input events for any validation scripts on the site
-    document.querySelectorAll('textarea').forEach(textarea => {
-        const event = new Event('input', { bubbles: true });
-        textarea.dispatchEvent(event);
-    });
+    log(`Filled ${textAreas.length} comment areas`);
+    return textAreas.length > 0;
+}
+
+// Simulate user input to trigger any validation scripts
+function simulateUserInput(element) {
+    if (!element || config.debug) return;
+    
+    // Create and dispatch input event
+    const inputEvent = new Event('input', { bubbles: true });
+    element.dispatchEvent(inputEvent);
+    
+    // Create and dispatch change event
+    const changeEvent = new Event('change', { bubbles: true });
+    element.dispatchEvent(changeEvent);
+    
+    // For good measure, also focus and blur the element
+    element.focus();
+    setTimeout(() => element.blur(), 100);
+}
+
+// Find and click the submit button
+function findAndClickSubmit() {
+    // List of possible submit button identifiers
+    const possibleButtons = [
+        // By type and value
+        'input[type="submit"]',
+        'button[type="submit"]',
+        // By value or text content
+        'input[value="Submit"]',
+        'button:contains("Submit")',
+        'input[value*="submit" i]',
+        'button[text*="submit" i]',
+        // By class or ID containing submit
+        '*[class*="submit" i]',
+        '*[id*="submit" i]',
+        // By appearance
+        'input.btn-primary',
+        'button.btn-primary',
+        // Last resort - any button-like element
+        '.btn',
+        'button'
+    ];
+    
+    let submitButton = null;
+    
+    // Try each selector until we find a match
+    for (const selector of possibleButtons) {
+        try {
+            const elements = document.querySelectorAll(selector);
+            for (const element of elements) {
+                // If it looks like a submit button
+                if (element.type === 'submit' || 
+                    (element.value && element.value.toLowerCase().includes('submit')) ||
+                    (element.textContent && element.textContent.toLowerCase().includes('submit'))) {
+                    submitButton = element;
+                    break;
+                }
+            }
+            if (submitButton) break;
+        } catch (e) {
+            // Some selectors might cause errors, we can ignore them
+        }
+    }
+    
+    if (!submitButton) {
+        // Try a more targeted approach - find buttons/inputs within a form
+        const forms = document.querySelectorAll('form');
+        for (const form of forms) {
+            const buttons = form.querySelectorAll('input[type="submit"], button[type="submit"], button');
+            if (buttons.length > 0) {
+                submitButton = buttons[0]; // Take the first one
+                break;
+            }
+        }
+    }
+    
+    if (submitButton && !config.debug) {
+        log(`Found submit button: ${submitButton.tagName} ${submitButton.type} ${submitButton.value || submitButton.textContent}`, false, true);
+        submitButton.click();
+        return true;
+    } else {
+        log('Submit button not found!', true, true);
+        return false;
+    }
 }
 
 // Fill the current form (either teacher or course)
 function fillCurrentForm(formType) {
-    return new Promise((resolve, reject) => {
-        try {
-            console.log(`Starting to fill ${formType} form...`);
+    try {
+        log(`Starting to fill ${formType} form...`, false, true);
+        
+        // Fill radio buttons
+        const radioSuccess = fillRadioButtons(formType);
+        
+        // Fill text areas
+        const textSuccess = fillTextAreas(formType);
+        
+        if (!radioSuccess && !textSuccess) {
+            log('Failed to fill any form elements!', true, true);
+            return false;
+        }
+        
+        // Submit the form if auto-submit is enabled
+        if (config.autoSubmit) {
+            log('Attempting to submit form...', false, true);
+            return findAndClickSubmit();
+        }
+        
+        log(`Form ${formType} filled successfully`, false, true);
+        return true;
+    } catch (error) {
+        log(`Error filling ${formType} form: ${error.message}`, true, true);
+        console.error(error);
+        return false;
+    }
+}
+
+// Get form counts from dashboard
+function getFormCounts() {
+    try {
+        const counts = {
+            teacher: { completed: 0, total: 0, pending: 0 },
+            course: { completed: 0, total: 0, pending: 0 }
+        };
+        
+        // Try multiple approaches to find the counts
+        
+        // Approach 1: Look for specific text content with numbers
+        const dashboardContent = document.body.textContent;
+        
+        // For Teacher Evaluation Forms
+        const teacherMatch = dashboardContent.match(/Teacher\s+Evaluation\s+Form\s+(\d+)\/(\d+)/i);
+        if (teacherMatch) {
+            counts.teacher.completed = parseInt(teacherMatch[1]);
+            counts.teacher.total = parseInt(teacherMatch[2]);
+            counts.teacher.pending = counts.teacher.total - counts.teacher.completed;
+        }
+        
+        // For Course Evaluation Forms
+        const courseMatch = dashboardContent.match(/Course\s+Evaluation\s+Form\s+(\d+)\/(\d+)/i);
+        if (courseMatch) {
+            counts.course.completed = parseInt(courseMatch[1]);
+            counts.course.total = parseInt(courseMatch[2]);
+            counts.course.pending = counts.course.total - counts.course.completed;
+        }
+        
+        // Approach 2: Look for elements with specific text
+        if (!teacherMatch || !courseMatch) {
+            const elements = document.querySelectorAll('*');
             
-            // Fill radio buttons
-            fillRadioButtons(formType);
+            for (const el of elements) {
+                const text = el.textContent?.trim();
+                
+                if (!text) continue;
+                
+                // Check for teacher form counts
+                if (text.match(/^(\d+)\/(\d+)$/) && el.closest('*:contains("Teacher")')) {
+                    const match = text.match(/^(\d+)\/(\d+)$/);
+                    counts.teacher.completed = parseInt(match[1]);
+                    counts.teacher.total = parseInt(match[2]);
+                    counts.teacher.pending = counts.teacher.total - counts.teacher.completed;
+                }
+                
+                // Check for course form counts
+                if (text.match(/^(\d+)\/(\d+)$/) && el.closest('*:contains("Course")')) {
+                    const match = text.match(/^(\d+)\/(\d+)$/);
+                    counts.course.completed = parseInt(match[1]);
+                    counts.course.total = parseInt(match[2]);
+                    counts.course.pending = counts.course.total - counts.course.completed;
+                }
+            }
+        }
+        
+        // Approach 3: Look specifically at the cards/blocks in the UI
+        const cards = document.querySelectorAll('.card, .block, div[class*="evaluation"], div[class*="form"]');
+        
+        for (const card of cards) {
+            const text = card.textContent?.trim();
             
-            // Fill text areas
-            fillTextAreas(formType);
+            if (!text) continue;
             
-            // Submit the form if auto-submit is enabled
-            if (config.autoSubmit) {
-                const submitButton = document.querySelector('input[type="submit"], button[type="submit"], input[value="Submit"], button:contains("Submit")');
-                if (submitButton) {
-                    console.log('Submitting form...');
-                    submitButton.click();
-                } else {
-                    console.warn('Submit button not found!');
+            if (text.includes('Teacher Evaluation')) {
+                const match = text.match(/(\d+)\/(\d+)/);
+                if (match) {
+                    counts.teacher.completed = parseInt(match[1]);
+                    counts.teacher.total = parseInt(match[2]);
+                    counts.teacher.pending = counts.teacher.total - counts.teacher.completed;
                 }
             }
             
-            console.log(`Form ${formType} filled successfully`);
-            resolve();
-        } catch (error) {
-            console.error(`Error filling ${formType} form:`, error);
-            reject(error);
+            if (text.includes('Course Evaluation')) {
+                const match = text.match(/(\d+)\/(\d+)/);
+                if (match) {
+                    counts.course.completed = parseInt(match[1]);
+                    counts.course.total = parseInt(match[2]);
+                    counts.course.pending = counts.course.total - counts.course.completed;
+                }
+            }
         }
-    });
-}
-
-// Navigate to a URL and wait for page load
-function navigateTo(url) {
-    return new Promise(resolve => {
-        console.log(`Navigating to: ${url}`);
-        window.location.href = url;
         
-        // We can't really wait for page load this way since this script will be terminated
-        // when navigation occurs. The next step will need to be handled after the new page loads.
-        setTimeout(resolve, 1000);
-    });
+        log(`Form counts - Teacher: ${counts.teacher.completed}/${counts.teacher.total} (${counts.teacher.pending} pending)`, false, true);
+        log(`Form counts - Course: ${counts.course.completed}/${counts.course.total} (${counts.course.pending} pending)`, false, true);
+        
+        return counts;
+    } catch (error) {
+        log(`Error getting form counts: ${error.message}`, true, true);
+        console.error(error);
+        return {
+            teacher: { completed: 0, total: 0, pending: 0 },
+            course: { completed: 0, total: 0, pending: 0 }
+        };
+    }
 }
 
-// Check if there are pending forms
-function hasPendingForms(formType) {
-    const countText = formType === 'teacher' ? 
-        document.querySelector('.Teacher.Evaluation')?.textContent : 
-        document.querySelector('.Course.Evaluation')?.textContent;
+// Find and click evaluation form links
+function findAndClickFormLink(formType) {
+    const formTypeLower = formType.toLowerCase();
+    const searchText = formTypeLower === 'teacher' ? 'Teacher Evaluation' : 'Course Evaluation';
     
-    if (countText) {
-        const match = countText.match(/(\d+)\/(\d+)/);
-        if (match) {
-            const [completed, total] = match.slice(1).map(Number);
-            return completed < total;
+    log(`Looking for ${searchText} link...`, false, true);
+    
+    try {
+        // Approach 1: Try finding links by their href attribute
+        let link = null;
+        
+        if (formTypeLower === 'teacher') {
+            link = document.querySelector('a[href*="TeacherEvaluationForm"], a[href*="teacherevaluationform"]');
+        } else {
+            link = document.querySelector('a[href*="CourseEvaluationForm"], a[href*="courseevaluationform"]');
         }
+        
+        if (link) {
+            log(`Found form link via href: ${link.href}`, false, true);
+            link.click();
+            return true;
+        }
+        
+        // Approach 2: Try finding links or clickable elements by their text content
+        const elementsWithText = [...document.querySelectorAll('a, button, div[onclick], span[onclick], *[class*="clickable"], *[role="button"]')]
+            .filter(el => el.textContent?.includes(searchText));
+        
+        if (elementsWithText.length > 0) {
+            log(`Found form link via text content: ${elementsWithText[0].textContent.trim()}`, false, true);
+            elementsWithText[0].click();
+            return true;
+        }
+        
+        // Approach 3: Look for cards/panels that might contain the forms
+        const cards = document.querySelectorAll('.card, .panel, .block, div[class*="evaluation"]');
+        
+        for (const card of cards) {
+            if (card.textContent?.includes(searchText)) {
+                log('Found card containing form text');
+                
+                // Try to find a clickable element within this card
+                const clickable = card.querySelector('a, button, [onclick]');
+                if (clickable) {
+                    log('Found clickable element in card', false, true);
+                    clickable.click();
+                    return true;
+                }
+                
+                // If no specific clickable element, try clicking the card itself
+                log('Trying to click the card itself', false, true);
+                card.click();
+                return true;
+            }
+        }
+        
+        // Approach 4: As a last resort, try getting the form URL directly
+        log('No clickable element found, trying direct navigation', false, true);
+        window.location.href = formTypeLower === 'teacher' ? URLS.teacherForm : URLS.courseForm;
+        return true;
+    } catch (error) {
+        log(`Error finding form link: ${error.message}`, true, true);
+        console.error(error);
+        return false;
     }
-    
-    return false;
+}
+
+// Update status message in the UI
+function updateStatus(message, isError = false) {
+    const statusElement = document.getElementById('qec-status-message');
+    if (statusElement) {
+        statusElement.style.display = 'block';
+        statusElement.style.background = isError ? '#ffebee' : '#e7f3fe';
+        statusElement.style.borderLeft = isError ? '5px solid #f44336' : '5px solid #2196F3';
+        statusElement.textContent = message;
+    }
+    log(message, isError, true);
 }
 
 // Create a UI to control the script
@@ -306,10 +658,20 @@ function createControlUI() {
     ui.style.cssText = 'position:fixed;top:10px;right:10px;background:#f0f0f0;border:2px solid #333;' +
                       'padding:15px;z-index:10000;border-radius:5px;box-shadow:0 0 10px rgba(0,0,0,0.2);max-width:350px;';
     
+    // Get current form counts
+    const formCounts = getFormCounts();
+    
     ui.innerHTML = `
         <h3 style="margin-top:0;color:#333;font-family:Arial;border-bottom:1px solid #ccc;padding-bottom:5px;">
             QEC Dashboard Auto-Fill
         </h3>
+        <div style="margin-bottom:10px;">
+            <p style="margin:5px 0;font-family:Arial;">
+                <strong>Form Status:</strong><br>
+                Teacher Forms: ${formCounts.teacher.completed}/${formCounts.teacher.total} (${formCounts.teacher.pending} pending)<br>
+                Course Forms: ${formCounts.course.completed}/${formCounts.course.total} (${formCounts.course.pending} pending)
+            </p>
+        </div>
         <div style="margin-bottom:10px;">
             <label style="display:block;margin-bottom:5px;font-weight:bold;font-family:Arial;">Teacher Form Rating:</label>
             <div style="display:flex;gap:5px;">
@@ -366,13 +728,19 @@ function createControlUI() {
                 Process Course Forms
             </label>
         </div>
-        <div style="display:flex;gap:10px;justify-content:space-between;">
+        <div style="display:flex;gap:10px;justify-content:space-between;margin-bottom:10px;">
             <button id="start-auto-fill" style="padding:8px 15px;background:#4CAF50;color:white;border:none;
                    border-radius:4px;cursor:pointer;flex:1;">Start Auto-Fill</button>
             <button id="close-ui" style="padding:8px 15px;background:#f44336;color:white;border:none;
                    border-radius:4px;cursor:pointer;">Close</button>
         </div>
-        <div id="status-message" style="margin-top:10px;padding:5px;background:#e7f3fe;border-left:5px solid #2196F3;font-family:Arial;display:none;">
+        <div style="margin-top:10px;">
+            <button id="fill-teacher-form" style="padding:5px 10px;margin-right:5px;background:#2196F3;color:white;border:none;
+                   border-radius:4px;cursor:pointer;width:48%;">Fill Single Teacher Form</button>
+            <button id="fill-course-form" style="padding:5px 10px;background:#FF9800;color:white;border:none;
+                   border-radius:4px;cursor:pointer;width:48%;">Fill Single Course Form</button>
+        </div>
+        <div id="qec-status-message" style="margin-top:10px;padding:8px;background:#e7f3fe;border-left:5px solid #2196F3;font-family:Arial;display:none;">
             Ready to start
         </div>
     `;
@@ -390,23 +758,7 @@ function createControlUI() {
     
     // Add event listeners
     document.getElementById('start-auto-fill').addEventListener('click', () => {
-        // Update config from UI
-        const teacherRatingSelect = document.getElementById('teacher-rating').value;
-        const courseRatingSelect = document.getElementById('course-rating').value;
-        
-        config.teacherRating.randomize = teacherRatingSelect === 'random';
-        config.teacherRating.defaultValue = config.teacherRating.randomize ? 5 : parseInt(teacherRatingSelect);
-        
-        config.courseRating.randomize = courseRatingSelect === 'random';
-        config.courseRating.defaultValue = config.courseRating.randomize ? 5 : parseInt(courseRatingSelect);
-        
-        config.attendanceValue = document.getElementById('attendance-value').value;
-        config.addComments = document.getElementById('add-comments').checked;
-        config.autoSubmit = document.getElementById('auto-submit').checked;
-        config.processTeacherForms = document.getElementById('process-teacher').checked;
-        config.processCourseforms = document.getElementById('process-course').checked;
-        
-        // Start the process
+        updateConfigFromUI();
         startAutoFill();
     });
     
@@ -414,8 +766,39 @@ function createControlUI() {
         ui.style.display = 'none';
     });
     
+    document.getElementById('fill-teacher-form').addEventListener('click', () => {
+        updateConfigFromUI();
+        fillSingleForm('teacher');
+    });
+    
+    document.getElementById('fill-course-form').addEventListener('click', () => {
+        updateConfigFromUI();
+        fillSingleForm('course');
+    });
+    
     // Make UI draggable
     makeElementDraggable(ui);
+}
+
+// Update configuration from UI
+function updateConfigFromUI() {
+    const teacherRatingSelect = document.getElementById('teacher-rating').value;
+    const courseRatingSelect = document.getElementById('course-rating').value;
+    
+    config.teacherRating.randomize = teacherRatingSelect === 'random';
+    config.teacherRating.defaultValue = config.teacherRating.randomize ? 5 : parseInt(teacherRatingSelect);
+    
+    config.courseRating.randomize = courseRatingSelect === 'random';
+    config.courseRating.defaultValue = config.courseRating.randomize ? 5 : parseInt(courseRatingSelect);
+    
+    config.attendanceValue = document.getElementById('attendance-value').value;
+    config.addComments = document.getElementById('add-comments').checked;
+    config.autoSubmit = document.getElementById('auto-submit').checked;
+    config.processTeacherForms = document.getElementById('process-teacher').checked;
+    config.processCourseforms = document.getElementById('process-course').checked;
+    
+    // Save configuration to session storage
+    sessionStorage.setItem('qecAutoFillConfig', JSON.stringify(config));
 }
 
 // Make an element draggable
@@ -459,16 +842,21 @@ function makeElementDraggable(element) {
     }
 }
 
-// Update status message
-function updateStatus(message, isError = false) {
-    const statusElement = document.getElementById('status-message');
-    if (statusElement) {
-        statusElement.style.display = 'block';
-        statusElement.style.background = isError ? '#ffebee' : '#e7f3fe';
-        statusElement.style.borderLeft = isError ? '5px solid #f44336' : '5px solid #2196F3';
-        statusElement.textContent = message;
+// Fill a single form of the specified type
+function fillSingleForm(formType) {
+    sessionStorage.setItem('qecAutoFillConfig', JSON.stringify(config));
+    sessionStorage.setItem('qecAutoFillType', formType);
+    sessionStorage.setItem('qecAutoFillSingle', 'true');
+    
+    updateStatus(`Navigating to ${formType} form...`, false);
+    
+    // Try to find and click the form link
+    const success = findAndClickFormLink(formType);
+    
+    if (!success) {
+        // If we couldn't find/click the link, try direct navigation
+        window.location.href = formType === 'teacher' ? URLS.teacherForm : URLS.courseForm;
     }
-    console.log(isError ? `ERROR: ${message}` : message);
 }
 
 // Start the auto-fill process
@@ -476,134 +864,161 @@ function startAutoFill() {
     // Store the configuration in sessionStorage to persist across page navigations
     sessionStorage.setItem('qecAutoFillConfig', JSON.stringify(config));
     sessionStorage.setItem('qecAutoFillRunning', 'true');
+    sessionStorage.removeItem('qecAutoFillSingle');
     
-    // We're on the dashboard, check if there are pending forms and navigate to the first one
-    if (window.location.href.includes(URLS.dashboard)) {
-        updateStatus('Starting auto-fill process...');
-        
-        // Determine which form to process first
-        if (config.processTeacherForms && hasPendingForms('teacher')) {
-            // Go to teacher form first
-            const teacherButton = document.querySelector('a[href*="TeacherEvaluationForm"]');
-            if (teacherButton) {
-                updateStatus('Navigating to Teacher Evaluation Form...');
-                teacherButton.click();
-            } else {
-                updateStatus('Teacher Evaluation button not found!', true);
-            }
-        } else if (config.processCourseforms && hasPendingForms('course')) {
-            // Go to course form
-            const courseButton = document.querySelector('a[href*="CourseEvaluationForm"]');
-            if (courseButton) {
-                updateStatus('Navigating to Course Evaluation Form...');
-                courseButton.click();
-            } else {
-                updateStatus('Course Evaluation button not found!', true);
-            }
-        } else {
-            updateStatus('No pending forms found!', true);
-            sessionStorage.removeItem('qecAutoFillRunning');
-        }
+    // Get the current form counts
+    const formCounts = getFormCounts();
+    
+    // Check if there are any forms to fill
+    const hasTeacherForms = config.processTeacherForms && formCounts.teacher.pending > 0;
+    const hasCourseForms = config.processCourseforms && formCounts.course.pending > 0;
+    
+    if (!hasTeacherForms && !hasCourseForms) {
+        updateStatus('No pending forms to fill!', true);
+        sessionStorage.removeItem('qecAutoFillRunning');
+        return;
+    }
+    
+    updateStatus('Starting auto-fill process...', false);
+    
+    // Determine which form to process first
+    if (hasTeacherForms) {
+        updateStatus('Navigating to Teacher Evaluation Form...', false);
+        findAndClickFormLink('teacher');
+    } else if (hasCourseForms) {
+        updateStatus('Navigating to Course Evaluation Form...', false);
+        findAndClickFormLink('course');
     }
 }
 
-// Function to check current page and perform appropriate action
+// Check current page and perform appropriate action
 function checkCurrentPageAndAct() {
-    // Check if we need to continue the auto-fill process
-    const isAutoFillRunning = sessionStorage.getItem('qecAutoFillRunning') === 'true';
-    if (!isAutoFillRunning) return;
-    
-    // Restore configuration
-    try {
-        const savedConfig = sessionStorage.getItem('qecAutoFillConfig');
-        if (savedConfig) {
-            Object.assign(config, JSON.parse(savedConfig));
-        }
-    } catch (error) {
-        console.error('Error restoring configuration:', error);
-    }
-    
     // Detect current page
     const currentUrl = window.location.href;
     
-    if (currentUrl.includes('TeacherEvaluationForm')) {
-        console.log('On Teacher Evaluation Form');
-        // Fill the teacher form
-        setTimeout(() => {
-            fillCurrentForm('teacher')
-                .then(() => {
-                    if (config.autoSubmit) {
-                        console.log('Teacher form submitted, waiting to return to dashboard...');
-                        // The form submission will navigate us back to the dashboard
-                    }
-                })
-                .catch(error => {
-                    console.error('Error in teacher form processing:', error);
-                    // If error, try to go back to dashboard
-                    window.location.href = URLS.dashboard;
-                });
-        }, 1500);
-        
-    } else if (currentUrl.includes('CourseEvaluationForm')) {
-        console.log('On Course Evaluation Form');
-        // Fill the course form
-        setTimeout(() => {
-            fillCurrentForm('course')
-                .then(() => {
-                    if (config.autoSubmit) {
-                        console.log('Course form submitted, waiting to return to dashboard...');
-                        // The form submission will navigate us back to the dashboard
-                    }
-                })
-                .catch(error => {
-                    console.error('Error in course form processing:', error);
-                    // If error, try to go back to dashboard
-                    window.location.href = URLS.dashboard;
-                });
-        }, 1500);
-        
-    } else if (currentUrl.includes('Dashboard')) {
-        console.log('Back on Dashboard');
+    // Check if we're on the dashboard
+    if (currentUrl.includes('/Dashboard.aspx')) {
+        log('On Dashboard page', false, true);
         
         // Create/update UI
         createControlUI();
         
-        // Check if there are more forms to process
-        setTimeout(() => {
-            // First try teacher forms if enabled
-            if (config.processTeacherForms && hasPendingForms('teacher')) {
-                updateStatus('Processing next Teacher Evaluation Form...');
-                const teacherButton = document.querySelector('a[href*="TeacherEvaluationForm"]');
-                if (teacherButton) {
-                    teacherButton.click();
-                    return;
+        // Check if we need to continue the auto-fill process
+        const isAutoFillRunning = sessionStorage.getItem('qecAutoFillRunning') === 'true';
+        
+        if (isAutoFillRunning) {
+            // Restore configuration
+            try {
+                const savedConfig = sessionStorage.getItem('qecAutoFillConfig');
+                if (savedConfig) {
+                    Object.assign(config, JSON.parse(savedConfig));
                 }
+            } catch (error) {
+                log('Error restoring configuration', true);
             }
             
-            // Then try course forms if enabled
-            if (config.processCourseforms && hasPendingForms('course')) {
-                updateStatus('Processing next Course Evaluation Form...');
-                const courseButton = document.querySelector('a[href*="CourseEvaluationForm"]');
-                if (courseButton) {
-                    courseButton.click();
+            // Get the current form counts
+            const formCounts = getFormCounts();
+            
+            // Check if there are more forms to process
+            setTimeout(() => {
+                // First try teacher forms if enabled
+                if (config.processTeacherForms && formCounts.teacher.pending > 0) {
+                    updateStatus('Processing next Teacher Evaluation Form...', false);
+                    findAndClickFormLink('teacher');
                     return;
                 }
+                
+                // Then try course forms if enabled
+                if (config.processCourseforms && formCounts.course.pending > 0) {
+                    updateStatus('Processing next Course Evaluation Form...', false);
+                    findAndClickFormLink('course');
+                    return;
+                }
+                
+                // If we reach here, all forms are processed
+                updateStatus('All selected forms have been processed! 🎉', false);
+                sessionStorage.removeItem('qecAutoFillRunning');
+            }, 1000);
+        }
+    } 
+    // Check if we're on a Teacher Evaluation Form
+    else if (currentUrl.includes('/TeacherEvaluationForm.aspx')) {
+        log('On Teacher Evaluation Form page', false, true);
+        
+        // Check if auto-fill is running or if we're doing a single form
+        const isAutoFillRunning = sessionStorage.getItem('qecAutoFillRunning') === 'true';
+        const isSingleFill = sessionStorage.getItem('qecAutoFillSingle') === 'true';
+        const formType = sessionStorage.getItem('qecAutoFillType');
+        
+        if (isAutoFillRunning || (isSingleFill && formType === 'teacher')) {
+            // Restore configuration
+            try {
+                const savedConfig = sessionStorage.getItem('qecAutoFillConfig');
+                if (savedConfig) {
+                    Object.assign(config, JSON.parse(savedConfig));
+                }
+            } catch (error) {
+                log('Error restoring configuration', true);
             }
             
-            // If we reach here, all forms are processed
-            updateStatus('All selected forms have been processed! 🎉');
-            sessionStorage.removeItem('qecAutoFillRunning');
-        }, 1000);
+            // Wait a bit for the page to fully load
+            setTimeout(() => {
+                fillCurrentForm('teacher');
+                
+                if (isSingleFill) {
+                    // If this is a single form fill, remove the flag
+                    sessionStorage.removeItem('qecAutoFillSingle');
+                }
+            }, 1500);
+        }
+    } 
+    // Check if we're on a Course Evaluation Form
+    else if (currentUrl.includes('/CourseEvaluationForm.aspx')) {
+        log('On Course Evaluation Form page', false, true);
+        
+        // Check if auto-fill is running or if we're doing a single form
+        const isAutoFillRunning = sessionStorage.getItem('qecAutoFillRunning') === 'true';
+        const isSingleFill = sessionStorage.getItem('qecAutoFillSingle') === 'true';
+        const formType = sessionStorage.getItem('qecAutoFillType');
+        
+        if (isAutoFillRunning || (isSingleFill && formType === 'course')) {
+            // Restore configuration
+            try {
+                const savedConfig = sessionStorage.getItem('qecAutoFillConfig');
+                if (savedConfig) {
+                    Object.assign(config, JSON.parse(savedConfig));
+                }
+            } catch (error) {
+                log('Error restoring configuration', true);
+            }
+            
+            // Wait a bit for the page to fully load
+            setTimeout(() => {
+                fillCurrentForm('course');
+                
+                if (isSingleFill) {
+                    // If this is a single form fill, remove the flag
+                    sessionStorage.removeItem('qecAutoFillSingle');
+                }
+            }, 1500);
+        }
     }
 }
 
 // Initialize the script
 function initialize() {
-    console.log('Initializing QEC Dashboard Auto-Fill Script');
+    log('Initializing QEC Dashboard Auto-Fill Script', false, true);
     
-    // If on dashboard, create the control UI
-    if (window.location.href.includes(URLS.dashboard)) {
-        createControlUI();
+    // Check if there's a saved configuration
+    try {
+        const savedConfig = sessionStorage.getItem('qecAutoFillConfig');
+        if (savedConfig) {
+            Object.assign(config, JSON.parse(savedConfig));
+            log('Restored saved configuration', false);
+        }
+    } catch (error) {
+        log('Error restoring configuration', true);
     }
     
     // Check current page and perform appropriate action
