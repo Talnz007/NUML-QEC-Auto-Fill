@@ -309,19 +309,23 @@ function getRandomRating(config) {
     return config.defaultValue;
 }
 
-// Check if we're on the dashboard page
+// Check if we're on the dashboard page - FIXED FUNCTION
 function isOnDashboard() {
-    return window.location.href.includes('/Dashboard.aspx');
+    const url = window.location.href.toLowerCase();
+    // More robust detection of dashboard page
+    return url.includes('dashboard.aspx') || 
+           url.includes('/student/dashboard') || 
+           url.includes('qec.numl.edu.pk/qec/student/') && !url.includes('evaluationform');
 }
 
 // Check if we're on the teacher evaluation form
 function isOnTeacherForm() {
-    return window.location.href.includes('/TeacherEvaluationForm.aspx');
+    return window.location.href.toLowerCase().includes('teacherevaluationform');
 }
 
 // Check if we're on the course evaluation form
 function isOnCourseForm() {
-    return window.location.href.includes('/CourseEvaluationForm.aspx');
+    return window.location.href.toLowerCase().includes('courseevaluationform');
 }
 
 // Navigate to a specific page
@@ -454,14 +458,22 @@ function fillCourseForm() {
     }
 }
 
-// Start the auto-fill process from the dashboard
+// Start the auto-fill process from the dashboard - FIXED FUNCTION
 function startProcess() {
+    // Debug info to help diagnose issues
+    console.log("Current URL:", window.location.href);
+    console.log("isOnDashboard() result:", isOnDashboard());
+    
+    // If we're on the dashboard, proceed with processing
+    // The improved isOnDashboard() function should fix the detection issue
     if (!isOnDashboard()) {
         updateStatus("Please navigate to the Dashboard first!", true);
         return;
     }
     
+    // Current location is dashboard, proceed with processing
     state.processingStarted = true;
+    updateStatus("Starting auto-fill process...");
     
     // Store state in localStorage
     localStorage.setItem('qecAutoFillState', JSON.stringify(state));
@@ -506,6 +518,12 @@ function completeProcess() {
 
 // Detect current page and take appropriate action
 function checkCurrentPageAndAct() {
+    // Debug current page
+    console.log("Current URL:", window.location.href);
+    console.log("On Dashboard:", isOnDashboard());
+    console.log("On Teacher Form:", isOnTeacherForm());
+    console.log("On Course Form:", isOnCourseForm());
+    
     // Restore state from localStorage if processing was started
     const savedState = localStorage.getItem('qecAutoFillState');
     if (savedState) {
