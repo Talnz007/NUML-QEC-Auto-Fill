@@ -59,7 +59,7 @@ After running the script, a control panel will appear in the top-right corner wi
 
 ## Demo
 
-![Auto-Fill Script Demo](qec-demo.gif)
+![Auto-Fill Script Demo](demo.webp)
 <!-- GIF showing the script in action will be placed here -->
 
 ## Customization
